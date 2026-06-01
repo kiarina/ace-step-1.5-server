@@ -60,9 +60,9 @@ POST /jobs
 ```json
 {
   "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
-  "lyrics": "[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ",
+  "lyrics": "[Intro]\n\n[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n揺れる心抱えながら\n一歩ずつ前を向いて\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ\n諦めないで走り続ける\nこの手を離さないで\n\n[Outro]\n光の中へ",
   "model": "xl-base",
-  "duration": 30,
+  "duration": 60,
   "lang": "ja",
   "seed": 1
 }
@@ -151,14 +151,17 @@ export PORT=8000  # match the port you started the server on
 # Submit a job
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
   -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
-    "lyrics": "[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ",
-    "model": "xl-base",
-    "duration": 30,
-    "lang": "ja",
-    "seed": 1
-  }' | jq -r .id)
+  --data-binary @- <<'EOF' | jq -r .id
+{
+  "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
+  "lyrics": "[Intro]\n\n[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n揺れる心抱えながら\n一歩ずつ前を向いて\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ\n諦めないで走り続ける\nこの手を離さないで\n\n[Outro]\n光の中へ",
+  "model": "xl-base",
+  "duration": 60,
+  "lang": "ja",
+  "seed": 1
+}
+EOF
+)
 
 echo "Job ID: $JOB"
 
