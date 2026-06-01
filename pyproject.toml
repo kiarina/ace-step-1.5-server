@@ -1,0 +1,15 @@
+[project]
+name = "ace-step-1-5-server"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "ace-step",
+    "fastapi>=0.136.3",
+    "python-multipart>=0.0.30",
+    "tomlkit>=0.13.3",
+    "uvicorn[standard]>=0.48.0",
+]
+
+[tool.uv.sources]
+ace-step = { git = "https://github.com/ace-step/ACE-Step-1.5.git" }
