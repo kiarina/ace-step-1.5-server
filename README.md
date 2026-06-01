@@ -49,107 +49,35 @@ The server pre-loads `xl-base` and the LLM at startup (~30s). Interactive docs a
 
 ---
 
-## API
+## Endpoints
 
-### Submit a job
-
-```
-POST /jobs
-```
-
-```json
-{
-  "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
-  "lyrics": "[Intro]\n\n[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n揺れる心抱えながら\n一歩ずつ前を向いて\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ\n諦めないで走り続ける\nこの手を離さないで\n\n[Outro]\n光の中へ",
-  "model": "xl-base",
-  "duration": 60,
-  "lang": "ja",
-  "seed": 1
-}
-```
-
-Response `202`:
-
-```json
-{
-  "id": "b3f1a2c4-...",
-  "status": "queued",
-  "position": 1
-}
-```
-
-### Poll status
-
-```
-GET /jobs/{id}
-```
-
-```json
-{
-  "id": "b3f1a2c4-...",
-  "status": "done",
-  "position": 0,
-  "created_at": 1700000000.0,
-  "started_at": 1700000001.0,
-  "completed_at": 1700000026.0,
-  "duration_sec": 25.1,
-  "output_path": "/path/to/outputs/xxx.wav",
-  "error": null,
-  "request": { ... }
-}
-```
-
-`status` values: `queued` → `running` → `done` / `failed`
-
-### Download WAV
-
-```
-GET /jobs/{id}/download
-```
-
-Returns the WAV file when `status == "done"`. Returns `409` if not done yet, `422` if failed.
-
-### Other endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /jobs` | List all in-memory jobs |
-| `GET /health` | Queue depth, loaded models |
-| `GET /help` | LLM-friendly full reference (prompts, lyrics, params) |
-| `GET /docs` | Interactive Swagger UI |
-
----
-
-## Parameters
-
-| Parameter | Default | Description |
+| Method | Path | Description |
 |---|---|---|
-| `prompt` | J-Pop preset | Music style description — genre, tempo, instruments, mood |
-| `lyrics` | `[Instrumental]` | Lyrics with `[Section]` tags. `[Instrumental]` = no vocals |
-| `model` | `xl-base` | `xl-base` (quality) or `turbo` (speed) |
-| `duration` | `30` | Output length in seconds (5–300) |
-| `lang` | `ja` | Vocal language: `ja` / `en` / `ko` / `zh` / `unknown` |
-| `seed` | `-1` | Random seed. `-1` = random. Same seed → same output |
-| `inference_steps` | *(preset)* | Override steps. More = higher quality, slower |
-| `guidance_scale` | *(preset)* | CFG strength (xl-base only) |
-| `shift` | `3.0` | Timestep shift. **Do not change from 3.0** unless experimenting |
+| `POST` | `/jobs/text2music` | Generate music from text and lyrics |
+| `POST` | `/jobs/cover` | Re-style an existing audio file |
+| `POST` | `/jobs/repaint` | Edit a specific time range of an audio file |
+| `POST` | `/jobs/extract` | Separate audio into stems |
+| `GET` | `/jobs` | List all in-memory jobs |
+| `GET` | `/jobs/{id}` | Get job status and metadata |
+| `GET` | `/jobs/{id}/download` | Download generated WAV |
+| `GET` | `/health` | Server health check |
+| `GET` | `/help` | LLM-friendly full reference |
+| `GET` | `/docs` | Interactive Swagger UI |
 
-### Models
-
-| Model | Steps | Quality | ~Speed (30s audio, M4 Max) |
-|---|---|---|---|
-| `xl-base` | 32 | ★★★★★ | ~25s |
-| `turbo` | 8 | ★★★☆☆ | ~4s |
+All generation endpoints return a job ID immediately (`202 Accepted`).
+Poll `GET /jobs/{id}` until `status == "done"`, then download with `GET /jobs/{id}/download`.
 
 ---
 
-## Usage example
+## Usage examples
+
+### text2music — Generate from text and lyrics
 
 ```bash
-export PORT=8000  # match the port you started the server on
+export PORT=8000
 
-# Submit a job
-JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
+# Submit
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/text2music \
   -H "Content-Type: application/json" \
   --data-binary @- <<'EOF' | jq -r .id
 {
@@ -163,14 +91,10 @@ JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
 EOF
 )
 
-echo "Job ID: $JOB"
-
-# Poll until done
-while true; do
-  STATUS=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)
-  echo "Status: $STATUS"
-  [ "$STATUS" = "done" ] && break
-  [ "$STATUS" = "failed" ] && break
+# Poll
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "queued" ] && \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "running" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
   sleep 5
 done
 
@@ -180,10 +104,207 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 
 ---
 
-## Tips
+### cover — Re-style an existing audio file
 
-See `GET /help` for a comprehensive LLM-friendly reference including:
-- Prompt writing techniques (narrative > list style)
-- Lyrics section tags and modifiers
-- Language codes
-- Reproducibility with seeds
+Transform the style of a song while preserving its musical structure.
+`src` must be an absolute path to a WAV file on the server.
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"  # e.g. output from text2music
+
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF | jq -r .id
+{
+  "src": "$SRC",
+  "prompt": "Acoustic folk, fingerpicked guitar, warm male vocal, intimate live recording",
+  "strength": 0.7,
+  "model": "xl-base",
+  "seed": 1
+}
+EOF
+)
+
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
+  sleep 5
+done
+
+curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
+```
+
+**`strength`**: how closely the output follows the source structure.
+- `0.3` — creative reimagining, loosely based on the original
+- `0.7` — (default) preserves structure, changes style
+- `1.0` — strict adherence to the original
+
+---
+
+### repaint — Edit a specific time range
+
+Regenerate a section of an existing audio file with a new style.
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"
+
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/repaint \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF | jq -r .id
+{
+  "src": "$SRC",
+  "prompt": "Dramatic orchestral strings, emotional swell, cinematic",
+  "start": 15,
+  "end": 30,
+  "strength": 0.6,
+  "model": "xl-base",
+  "seed": 1
+}
+EOF
+)
+
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
+  sleep 5
+done
+
+curl -o repainted.wav http://localhost:$PORT/jobs/$JOB/download
+```
+
+- `start` / `end`: time range in seconds. `end: -1` means until end of file.
+- `strength`: repaint intensity. `0.5` (default) blends well with surrounding sections.
+
+---
+
+### extract — Separate audio into stems
+
+Each target stem is a **separate job**. The response contains a list of IDs.
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"
+
+RESP=$(curl -s -X POST http://localhost:$PORT/jobs/extract \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF
+{
+  "src": "$SRC",
+  "targets": ["vocals", "drums", "bass", "other"],
+  "model": "xl-base"
+}
+EOF
+)
+
+echo "$RESP" | jq .
+# { "ids": ["aaa...", "bbb...", "ccc...", "ddd..."], "targets": [...], "status": "queued" }
+
+# Poll and download each stem
+for ID in $(echo "$RESP" | jq -r '.ids[]'); do
+  TARGET=$(curl -s http://localhost:$PORT/jobs/$ID | jq -r '.request.targets[0]')
+  until [ "$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)" = "done" ] || \
+        [ "$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)" = "failed" ]; do
+    echo "[$TARGET] status: $(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)"
+    sleep 5
+  done
+  curl -o "${TARGET}.wav" http://localhost:$PORT/jobs/$ID/download
+  echo "Saved ${TARGET}.wav"
+done
+```
+
+Available targets: `vocals`, `drums`, `bass`, `other` (and any stem name supported by ACE-Step).
+
+---
+
+## Parameters
+
+### Common (all tasks)
+
+| Parameter | Default | Description |
+|---|---|---|
+| `model` | `xl-base` | `xl-base` (quality) or `turbo` (speed) |
+| `seed` | `-1` | Random seed. `-1` = random. Same seed → same output |
+| `inference_steps` | *(preset)* | Override steps. More = higher quality, slower |
+| `guidance_scale` | *(preset)* | CFG strength (xl-base only) |
+| `shift` | `3.0` | Timestep shift. **Do not change from 3.0** unless experimenting |
+
+### text2music
+
+| Parameter | Default | Description |
+|---|---|---|
+| `prompt` | J-Pop preset | Music style description — genre, tempo, instruments, mood |
+| `lyrics` | `[Instrumental]` | Lyrics with `[Section]` tags. Match length to `duration` |
+| `duration` | `60` | Output length in seconds (5–300) |
+| `lang` | `ja` | Vocal language: `ja` / `en` / `ko` / `zh` / `unknown` |
+
+### cover
+
+| Parameter | Default | Description |
+|---|---|---|
+| `src` | — | Absolute path to source WAV on the server |
+| `prompt` | — | Target style description |
+| `strength` | `0.7` | Source adherence (0.0–1.0) |
+| `duration` | `null` | Output length. Defaults to source length |
+
+### repaint
+
+| Parameter | Default | Description |
+|---|---|---|
+| `src` | — | Absolute path to source WAV on the server |
+| `prompt` | — | Style for the repainted section |
+| `start` | — | Start time in seconds |
+| `end` | `-1` | End time in seconds. `-1` = until end of file |
+| `strength` | `0.5` | Repaint intensity (0.0–1.0) |
+
+### extract
+
+| Parameter | Default | Description |
+|---|---|---|
+| `src` | — | Absolute path to source WAV on the server |
+| `targets` | `["vocals","drums","bass","other"]` | Stems to extract |
+
+### Models
+
+| Model | Steps | Quality | ~Speed (30s audio, M4 Max) |
+|---|---|---|---|
+| `xl-base` | 32 | ★★★★★ | ~25s |
+| `turbo` | 8 | ★★★☆☆ | ~4s |
+
+---
+
+## Prompt tips
+
+Describe the **sound**, not the story. Narrative prompts work better than keyword lists.
+
+```
+✗  piano, sad, female, slow
+
+✓  A melancholic piano ballad where soft female vocals weave through gentle string
+   accompaniment, creating an intimate and heartbreaking atmosphere. 80 BPM.
+```
+
+Key elements: genre · tempo/BPM · instruments · vocal style · mood · production style
+
+---
+
+## Lyrics format
+
+Structure lyrics with `[Square Bracket]` section tags at the start of a line.
+
+```
+[Intro]          Opening — instrumental or atmospheric
+[Verse 1]        First verse
+[Pre-Chorus]     Build-up before the hook
+[Chorus]         The hook — emotionally strongest part
+[Bridge]         Contrasting section
+[Instrumental]   No vocals
+[Outro]          Closing
+```
+
+Modifiers: `[Verse 1 - Female]`, `[Chorus - Both]`, `[Bridge - Whispered]`, `[Outro - Fade out]`
+
+> **Tip:** Match lyrics length to `duration`. Too few lines for a long duration causes the model to lose coherence in the second half.
+
+See `GET /help` for a complete LLM-friendly reference.

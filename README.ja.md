@@ -50,107 +50,35 @@ uv run uvicorn main:app --host 0.0.0.0 --port $PORT
 
 ---
 
-## API
+## エンドポイント一覧
 
-### ジョブを投稿する
-
-```
-POST /jobs
-```
-
-```json
-{
-  "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
-  "lyrics": "[Intro]\n\n[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n揺れる心抱えながら\n一歩ずつ前を向いて\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ\n諦めないで走り続ける\nこの手を離さないで\n\n[Outro]\n光の中へ",
-  "model": "xl-base",
-  "duration": 60,
-  "lang": "ja",
-  "seed": 1
-}
-```
-
-レスポンス `202`:
-
-```json
-{
-  "id": "b3f1a2c4-...",
-  "status": "queued",
-  "position": 1
-}
-```
-
-### ステータスを確認する
-
-```
-GET /jobs/{id}
-```
-
-```json
-{
-  "id": "b3f1a2c4-...",
-  "status": "done",
-  "position": 0,
-  "created_at": 1700000000.0,
-  "started_at": 1700000001.0,
-  "completed_at": 1700000026.0,
-  "duration_sec": 25.1,
-  "output_path": "/path/to/outputs/xxx.wav",
-  "error": null,
-  "request": { ... }
-}
-```
-
-`status` の遷移: `queued` → `running` → `done` / `failed`
-
-### WAV をダウンロードする
-
-```
-GET /jobs/{id}/download
-```
-
-`status == "done"` になると WAV ファイルを返します。まだ完了していない場合は `409`、失敗した場合は `422` を返します。
-
-### その他のエンドポイント
-
-| エンドポイント | 説明 |
-|---|---|
-| `GET /jobs` | オンメモリのジョブ一覧 |
-| `GET /health` | キュー深さ・ロード済みモデル |
-| `GET /help` | LLM 向け詳細リファレンス（プロンプト・歌詞・パラメーター） |
-| `GET /docs` | Swagger UI（インタラクティブ） |
-
----
-
-## パラメーター一覧
-
-| パラメーター | デフォルト | 説明 |
+| メソッド | パス | 説明 |
 |---|---|---|
-| `prompt` | J-Pop プリセット | 音楽スタイルの説明 — ジャンル・テンポ・楽器・ムード |
-| `lyrics` | `[Instrumental]` | `[Section]` タグ付きの歌詞。`[Instrumental]` でボーカルなし |
-| `model` | `xl-base` | `xl-base`（品質重視）または `turbo`（速度重視） |
-| `duration` | `30` | 生成秒数（5〜300） |
-| `lang` | `ja` | ボーカル言語コード: `ja` / `en` / `ko` / `zh` / `unknown` |
-| `seed` | `-1` | 乱数シード。`-1` はランダム。同じシード → 同じ出力 |
-| `inference_steps` | *プリセット値* | ステップ数の上書き。多いほど高品質・低速 |
-| `guidance_scale` | *プリセット値* | CFG 強度（xl-base のみ有効） |
-| `shift` | `3.0` | タイムステップシフト。**3.0 から変えないこと**（1.0 にするとノイズが出ます） |
+| `POST` | `/jobs/text2music` | テキスト・歌詞から楽曲を新規生成 |
+| `POST` | `/jobs/cover` | 既存音源のスタイルを変換 |
+| `POST` | `/jobs/repaint` | 曲の特定区間を部分修正 |
+| `POST` | `/jobs/extract` | 音源をステムに分離 |
+| `GET` | `/jobs` | オンメモリのジョブ一覧 |
+| `GET` | `/jobs/{id}` | ジョブのステータスとメタデータ |
+| `GET` | `/jobs/{id}/download` | 生成された WAV をダウンロード |
+| `GET` | `/health` | サーバーヘルスチェック |
+| `GET` | `/help` | LLM 向け詳細リファレンス |
+| `GET` | `/docs` | Swagger UI（インタラクティブ） |
 
-### モデル比較
-
-| モデル | ステップ数 | 品質 | 速度の目安（30 秒の音楽 / M4 Max） |
-|---|---|---|---|
-| `xl-base` | 32 | ★★★★★ | 約 25 秒 |
-| `turbo` | 8 | ★★★☆☆ | 約 4 秒 |
+生成エンドポイントはすべてジョブ ID を即座に返します（`202 Accepted`）。
+`GET /jobs/{id}` を `status == "done"` になるまでポーリングし、`GET /jobs/{id}/download` でダウンロードします。
 
 ---
 
 ## 使用例
 
+### text2music — テキスト・歌詞から楽曲を生成
+
 ```bash
-export PORT=8000  # サーバー起動時に指定したポートに合わせてください
+export PORT=8000
 
 # ジョブを投稿
-JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/text2music \
   -H "Content-Type: application/json" \
   --data-binary @- <<'EOF' | jq -r .id
 {
@@ -164,14 +92,10 @@ JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
 EOF
 )
 
-echo "Job ID: $JOB"
-
-# 完了するまでポーリング
-while true; do
-  STATUS=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)
-  echo "Status: $STATUS"
-  [ "$STATUS" = "done" ] && break
-  [ "$STATUS" = "failed" ] && break
+# 完了まで待つ
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "queued" ] && \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "running" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
   sleep 5
 done
 
@@ -181,22 +105,179 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 
 ---
 
+### cover — 既存音源のスタイルを変換
+
+曲の音楽構造を保ちながら、スタイルだけを変換します。
+`src` はサーバー上の WAV ファイルの絶対パスを指定します。
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"  # 例: text2music の output_path
+
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF | jq -r .id
+{
+  "src": "$SRC",
+  "prompt": "Acoustic folk, fingerpicked guitar, warm male vocal, intimate live recording",
+  "strength": 0.7,
+  "model": "xl-base",
+  "seed": 1
+}
+EOF
+)
+
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
+  sleep 5
+done
+
+curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
+```
+
+**`strength`** — 元音源への追従度（0.0〜1.0）:
+- `0.3` — 自由なリアレンジ。原曲からの変化が大きい
+- `0.7` — （デフォルト）構造を保ちつつスタイルを変換
+- `1.0` — 原曲に忠実。スタイルの変化は最小限
+
+---
+
+### repaint — 特定区間を部分修正
+
+既存の音源の指定した時間範囲だけを新しいスタイルで再生成します。
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"
+
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs/repaint \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF | jq -r .id
+{
+  "src": "$SRC",
+  "prompt": "Dramatic orchestral strings, emotional swell, cinematic",
+  "start": 15,
+  "end": 30,
+  "strength": 0.6,
+  "model": "xl-base",
+  "seed": 1
+}
+EOF
+)
+
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
+  echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
+  sleep 5
+done
+
+curl -o repainted.wav http://localhost:$PORT/jobs/$JOB/download
+```
+
+- `start` / `end`: 修正する区間を秒で指定。`end: -1` で末尾まで
+- `strength`: 修正の強さ。`0.5`（デフォルト）は前後との自然なつながりを保ちやすい
+
+---
+
+### extract — 音源をステムに分離
+
+ターゲットごとに**別々のジョブ**が生成されます。レスポンスに ID のリストが返ります。
+
+```bash
+export PORT=8000
+SRC="/absolute/path/to/song.wav"
+
+RESP=$(curl -s -X POST http://localhost:$PORT/jobs/extract \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<EOF
+{
+  "src": "$SRC",
+  "targets": ["vocals", "drums", "bass", "other"],
+  "model": "xl-base"
+}
+EOF
+)
+
+echo "$RESP" | jq .
+# { "ids": ["aaa...", "bbb...", "ccc...", "ddd..."], "targets": [...], "status": "queued" }
+
+# 各ステムをポーリングしてダウンロード
+for ID in $(echo "$RESP" | jq -r '.ids[]'); do
+  TARGET=$(curl -s http://localhost:$PORT/jobs/$ID | jq -r '.request.targets[0]')
+  until [ "$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)" = "done" ] || \
+        [ "$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)" = "failed" ]; do
+    echo "[$TARGET] status: $(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)"
+    sleep 5
+  done
+  curl -o "${TARGET}.wav" http://localhost:$PORT/jobs/$ID/download
+  echo "保存しました: ${TARGET}.wav"
+done
+```
+
+指定できるターゲット: `vocals`、`drums`、`bass`、`other`（ACE-Step がサポートするステム名）
+
+---
+
+## パラメーター一覧
+
+### 共通（全タスク）
+
+| パラメーター | デフォルト | 説明 |
+|---|---|---|
+| `model` | `xl-base` | `xl-base`（品質重視）または `turbo`（速度重視） |
+| `seed` | `-1` | 乱数シード。`-1` はランダム。同じシード → 同じ出力 |
+| `inference_steps` | *プリセット値* | ステップ数の上書き。多いほど高品質・低速 |
+| `guidance_scale` | *プリセット値* | CFG 強度（xl-base のみ有効） |
+| `shift` | `3.0` | タイムステップシフト。**3.0 から変えないこと**（1.0 にするとノイズが出ます） |
+
+### text2music
+
+| パラメーター | デフォルト | 説明 |
+|---|---|---|
+| `prompt` | J-Pop プリセット | 音楽スタイルの説明 — ジャンル・テンポ・楽器・ムード |
+| `lyrics` | `[Instrumental]` | `[Section]` タグ付きの歌詞。長さを `duration` に合わせること |
+| `duration` | `60` | 生成秒数（5〜300） |
+| `lang` | `ja` | ボーカル言語コード: `ja` / `en` / `ko` / `zh` / `unknown` |
+
+### cover
+
+| パラメーター | デフォルト | 説明 |
+|---|---|---|
+| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `prompt` | — | 変換後のスタイル説明 |
+| `strength` | `0.7` | 元音源への追従度（0.0〜1.0） |
+| `duration` | `null` | 生成秒数。未指定時は元音源と同じ長さ |
+
+### repaint
+
+| パラメーター | デフォルト | 説明 |
+|---|---|---|
+| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `prompt` | — | 修正後のスタイル説明 |
+| `start` | — | 修正開始時刻（秒） |
+| `end` | `-1` | 修正終了時刻（秒）。`-1` で末尾まで |
+| `strength` | `0.5` | 修正強度（0.0〜1.0） |
+
+### extract
+
+| パラメーター | デフォルト | 説明 |
+|---|---|---|
+| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `targets` | `["vocals","drums","bass","other"]` | 分離するステムのリスト |
+
+### モデル比較
+
+| モデル | ステップ数 | 品質 | 速度の目安（30 秒の音楽 / M4 Max） |
+|---|---|---|---|
+| `xl-base` | 32 | ★★★★★ | 約 25 秒 |
+| `turbo` | 8 | ★★★☆☆ | 約 4 秒 |
+
+---
+
 ## プロンプトの書き方
 
-`prompt` には**音そのもの**を描写します。歌詞の内容ではなく、聴こえてくるサウンドを説明してください。
-
-### 盛り込む要素
-
-| 要素 | 例 |
-|---|---|
-| **ジャンル** | Modern J-Pop / Acoustic Jazz / Dark Trap / Lo-fi Hip-hop |
-| **テンポ・エネルギー** | 132 BPM / slow and intimate / driving beat |
-| **楽器** | bright piano / smooth saxophone / 808 sub-bass / nylon guitar |
-| **ボーカルスタイル** | emotional female vocal / whispered delivery / powerful male tenor |
-| **ムード** | melancholic / triumphant / cozy / aggressive / dreamy |
-| **制作スタイル** | polished radio-ready / lo-fi vinyl texture / orchestral arrangement |
-
-### 箇条書きより物語調
+`prompt` には**音そのもの**を描写します。歌詞の内容ではなく、聴こえてくるサウンドを説明してください。箇条書きより物語調が効果的です。
 
 ```
 ✗ 悪い例: piano, sad, female, slow
@@ -205,6 +286,8 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
           gentle string accompaniment, creating an intimate and heartbreaking
           atmosphere. 80 BPM.
 ```
+
+盛り込む要素: ジャンル · テンポ/BPM · 楽器 · ボーカルスタイル · ムード · 制作スタイル
 
 ---
 
@@ -222,30 +305,8 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 [Outro]           アウトロ
 ```
 
-### スタイル修飾子
+修飾子: `[Verse 1 - Female]`、`[Chorus - Both]`、`[Bridge - Whispered]`、`[Outro - Fade out]`
 
-タグにダッシュ付きで修飾できます。
+> **注意:** 歌詞の量を `duration` に合わせてください。長い曲に対して歌詞が短すぎると、後半でモデルが崩れやすくなります。
 
-```
-[Verse 1 - Female]              女性ボーカル
-[Chorus - Both]                 デュエット
-[Bridge - Whispered]            ウィスパー
-[Instrumental - Guitar Solo]    ギターソロ
-[Outro - Fade out]              フェードアウト
-```
-
-### インストゥルメンタル
-
-ボーカルなしの場合は `lyrics` を `"[Instrumental]"` に設定します。
-
----
-
-## Tips
-
-`GET /help` で LLM 向けの詳細リファレンスを取得できます。以下の情報が JSON で返されます：
-
-- プロンプトの書き方と実例
-- 歌詞フォーマットの詳細
-- 言語コード一覧（50 言語以上対応）
-- シードを使った再現性の確保
-- 上級者向けパラメーター解説
+詳細なリファレンスは `GET /help` で確認できます。
