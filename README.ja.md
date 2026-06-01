@@ -60,12 +60,12 @@ POST /jobs
 
 ```json
 {
-  "prompt": "Modern J-Pop, 132 BPM, bright piano, upbeat drums",
-  "lyrics": "[Verse 1]\n光の中へ\n[Chorus]\n僕らは走り続ける",
+  "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
+  "lyrics": "[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ",
   "model": "xl-base",
   "duration": 30,
   "lang": "ja",
-  "seed": -1
+  "seed": 1
 }
 ```
 
@@ -153,11 +153,12 @@ export PORT=8000  # サーバー起動時に指定したポートに合わせて
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Upbeat anime opening, orchestral brass, driving rock drums, powerful male vocal",
-    "lyrics": "[Verse 1]\n夢を追いかけて\n[Chorus]\n諦めないで走り続ける",
+    "prompt": "Modern J-Pop, 132 BPM, bright piano, emotional electric guitar, upbeat drums, polished production",
+    "lyrics": "[Verse 1]\n加速する世界の中で\n君の声が聴こえてくる\n\n[Chorus]\n僕らは光を追いかける\n終わらない夢の向こうへ",
     "model": "xl-base",
-    "duration": 60,
-    "lang": "ja"
+    "duration": 30,
+    "lang": "ja",
+    "seed": 1
   }' | jq -r .id)
 
 echo "Job ID: $JOB"
