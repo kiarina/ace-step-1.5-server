@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Print launchd status and HTTP health"
+set -euo pipefail
+
+LABEL="${ACE_STEP_SERVICE_LABEL:-io.github.kiarina.ace-step-1.5-server}"
+DOMAIN="gui/$(id -u)"
+
+launchctl print "${DOMAIN}/${LABEL}"
+echo
+curl -fsS http://localhost:8001/health
+echo

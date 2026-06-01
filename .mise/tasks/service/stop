@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Stop and unload the user launchd service"
+set -euo pipefail
+
+LABEL="${ACE_STEP_SERVICE_LABEL:-io.github.kiarina.ace-step-1.5-server}"
+DOMAIN="gui/$(id -u)"
+
+if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "${DOMAIN}/${LABEL}"
+  echo "Stopped ${LABEL}"
+else
+  echo "${LABEL} is not loaded"
+fi

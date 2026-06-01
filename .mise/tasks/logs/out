@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Tail ace-step-1.5-server stdout log"
+set -euo pipefail
+
+tail -f /tmp/ace-step-1.5-server.out.log

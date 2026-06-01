@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Restart the user launchd service"
+set -euo pipefail
+
+TASK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+"$TASK_DIR/stop"
+"$TASK_DIR/start"

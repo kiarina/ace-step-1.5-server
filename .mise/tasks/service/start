@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Bootstrap and start the user launchd service"
+set -euo pipefail
+
+LABEL="${ACE_STEP_SERVICE_LABEL:-io.github.kiarina.ace-step-1.5-server}"
+PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+DOMAIN="gui/$(id -u)"
+TASK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ ! -f "$PLIST" ]]; then
+  "$TASK_DIR/install"
+fi
+
+if ! launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+  launchctl bootstrap "$DOMAIN" "$PLIST"
+fi
+
+launchctl kickstart -k "${DOMAIN}/${LABEL}"
+echo "Started ${LABEL}"
