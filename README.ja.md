@@ -42,10 +42,11 @@ uv run hf download ACE-Step/Ace-Step1.5 \
 ### 3. サーバーを起動
 
 ```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8000
+export PORT=8000  # 使用中なら変更してください
+uv run uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-起動時に `xl-base` と LLM を先読み込みします（約 30 秒）。インタラクティブな API ドキュメントは http://localhost:8000/docs で確認できます。
+起動時に `xl-base` と LLM を先読み込みします（約 30 秒）。インタラクティブな API ドキュメントは http://localhost:$PORT/docs で確認できます。
 
 ---
 
@@ -146,8 +147,10 @@ GET /jobs/{id}/download
 ## 使用例
 
 ```bash
+export PORT=8000  # サーバー起動時に指定したポートに合わせてください
+
 # ジョブを投稿
-JOB=$(curl -s -X POST http://localhost:8000/jobs \
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Upbeat anime opening, orchestral brass, driving rock drums, powerful male vocal",
@@ -161,7 +164,7 @@ echo "Job ID: $JOB"
 
 # 完了するまでポーリング
 while true; do
-  STATUS=$(curl -s http://localhost:8000/jobs/$JOB | jq -r .status)
+  STATUS=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)
   echo "Status: $STATUS"
   [ "$STATUS" = "done" ] && break
   [ "$STATUS" = "failed" ] && break
@@ -169,7 +172,7 @@ while true; do
 done
 
 # ダウンロード
-curl -o song.wav http://localhost:8000/jobs/$JOB/download
+curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 ```
 
 ---

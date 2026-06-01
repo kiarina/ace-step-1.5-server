@@ -41,10 +41,11 @@ uv run hf download ACE-Step/Ace-Step1.5 \
 ### 3. Start the server
 
 ```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8000
+export PORT=8000  # change if the port is taken
+uv run uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-The server pre-loads `xl-base` and the LLM at startup (~30s). Interactive docs available at http://localhost:8000/docs.
+The server pre-loads `xl-base` and the LLM at startup (~30s). Interactive docs available at http://localhost:$PORT/docs.
 
 ---
 
@@ -145,8 +146,10 @@ Returns the WAV file when `status == "done"`. Returns `409` if not done yet, `42
 ## Usage example
 
 ```bash
+export PORT=8000  # match the port you started the server on
+
 # Submit a job
-JOB=$(curl -s -X POST http://localhost:8000/jobs \
+JOB=$(curl -s -X POST http://localhost:$PORT/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Upbeat anime opening, orchestral brass, driving rock drums, powerful male vocal",
@@ -160,7 +163,7 @@ echo "Job ID: $JOB"
 
 # Poll until done
 while true; do
-  STATUS=$(curl -s http://localhost:8000/jobs/$JOB | jq -r .status)
+  STATUS=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)
   echo "Status: $STATUS"
   [ "$STATUS" = "done" ] && break
   [ "$STATUS" = "failed" ] && break
@@ -168,7 +171,7 @@ while true; do
 done
 
 # Download
-curl -o song.wav http://localhost:8000/jobs/$JOB/download
+curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 ```
 
 ---
