@@ -22,8 +22,10 @@ uv sync
 
 ```bash
 # LLM (required for all generation)
-uv run hf download ACE-Step/acestep-5Hz-lm-1.7B \
-  --local-dir ./checkpoints/acestep-5Hz-lm-1.7B
+# The 1.7B LLM is bundled inside the Ace-Step1.5 repo — download only that subfolder:
+uv run hf download ACE-Step/Ace-Step1.5 \
+  --include "acestep-5Hz-lm-1.7B/*" \
+  --local-dir ./checkpoints
 
 # DiT model — choose one or both:
 
@@ -31,7 +33,7 @@ uv run hf download ACE-Step/acestep-5Hz-lm-1.7B \
 uv run hf download ACE-Step/acestep-v15-xl-base \
   --local-dir ./checkpoints/acestep-v15-xl-base
 
-# turbo: fastest (~9GB)
+# turbo: fastest (~9GB) — also contains the LLM above, so one command covers both
 uv run hf download ACE-Step/Ace-Step1.5 \
   --local-dir ./checkpoints/acestep-v15-turbo
 ```

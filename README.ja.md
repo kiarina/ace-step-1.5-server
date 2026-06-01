@@ -22,8 +22,11 @@ uv sync
 
 ```bash
 # LLM（全生成で必須）
-uv run hf download ACE-Step/acestep-5Hz-lm-1.7B \
-  --local-dir ./checkpoints/acestep-5Hz-lm-1.7B
+# 1.7B LLM は Ace-Step1.5 リポジトリのサブフォルダに同梱されています。
+# --include でそのフォルダだけダウンロードできます:
+uv run hf download ACE-Step/Ace-Step1.5 \
+  --include "acestep-5Hz-lm-1.7B/*" \
+  --local-dir ./checkpoints
 
 # DiT モデル — どちらか一方、または両方:
 
@@ -31,7 +34,7 @@ uv run hf download ACE-Step/acestep-5Hz-lm-1.7B \
 uv run hf download ACE-Step/acestep-v15-xl-base \
   --local-dir ./checkpoints/acestep-v15-xl-base
 
-# turbo: 最速（約 9GB）
+# turbo: 最速（約 9GB）— LLM も同梱されているので、1コマンドで両方取得できます
 uv run hf download ACE-Step/Ace-Step1.5 \
   --local-dir ./checkpoints/acestep-v15-turbo
 ```
