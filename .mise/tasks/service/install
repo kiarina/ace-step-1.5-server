@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 #MISE description="Install the user launchd service for ace-step-1.5-server"
+#MISE alias="install"
+# Usage: mise run service:install [PORT]
+#   PORT  Port number to listen on (default: 8000)
+#         Can also be set via ACE_STEP_PORT env var.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LABEL="${ACE_STEP_SERVICE_LABEL:-io.github.kiarina.ace-step-1.5-server}"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 PYTHON="$PROJECT_DIR/.venv/bin/python"
+PORT="${1:-${ACE_STEP_PORT:-8000}}"
 
 if [[ ! -x "$PYTHON" ]]; then
   echo "Missing virtualenv Python: $PYTHON" >&2
@@ -33,7 +38,7 @@ cat > "$PLIST" <<PLIST
       <string>--host</string>
       <string>0.0.0.0</string>
       <string>--port</string>
-      <string>8001</string>
+      <string>${PORT}</string>
     </array>
 
     <key>WorkingDirectory</key>
