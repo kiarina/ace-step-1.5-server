@@ -118,7 +118,7 @@ JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
   --data-binary @- <<EOF | jq -r .id
 {
   "src": "$SRC",
-  "prompt": "Acoustic folk, fingerpicked guitar, warm male vocal, intimate live recording",
+  "prompt": "City Pop, groovy bass, smooth guitar, laid-back drums, polished 80s production",
   "strength": 0.7,
   "model": "xl-base",
   "seed": 1
@@ -139,6 +139,9 @@ curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
 - `0.3` — creative reimagining, loosely based on the original
 - `0.7` — (default) preserves structure, changes style
 - `1.0` — strict adherence to the original
+
+> **Tip:** Cover works best for **similar genre transfers** (e.g. J-Pop → City Pop, Rock → Blues Rock).
+> Dramatic genre changes (e.g. J-Pop → Acoustic Folk) tend to produce unstable results.
 
 ---
 

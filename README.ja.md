@@ -119,7 +119,7 @@ JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
   --data-binary @- <<EOF | jq -r .id
 {
   "src": "$SRC",
-  "prompt": "Acoustic folk, fingerpicked guitar, warm male vocal, intimate live recording",
+  "prompt": "City Pop, groovy bass, smooth guitar, laid-back drums, polished 80s production",
   "strength": 0.7,
   "model": "xl-base",
   "seed": 1
@@ -140,6 +140,9 @@ curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
 - `0.3` — 自由なリアレンジ。原曲からの変化が大きい
 - `0.7` — （デフォルト）構造を保ちつつスタイルを変換
 - `1.0` — 原曲に忠実。スタイルの変化は最小限
+
+> **注意:** cover は**似たジャンル間の変換**（例: J-Pop → City Pop、Rock → Blues Rock）に向いています。
+> ジャンルの差が大きい変換（例: J-Pop → Acoustic Folk）は出力が不安定になりやすいです。
 
 ---
 
