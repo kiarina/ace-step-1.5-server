@@ -3,8 +3,9 @@
 [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) を使った **FastAPI** 音楽生成サーバーです。**Apple Silicon（Mac Studio M4 Max）** 向けに最適化しています。
 
 - リクエストは並行して受け付け、内部キューで一件ずつ処理
-- リクエストごとにジョブ ID を発行し、非同期でステータス確認・ファイルダウンロードが可能
-- ジョブはオンメモリのみ — サーバー再起動で消える
+- リクエストごとにジョブ ID を発行し、非同期でステータス確認が可能
+- アップロードファイルも生成結果も `/files` API で `file_id` により統一管理
+- ジョブとファイルはオンメモリのみ — サーバー再起動で消える
 
 ---
 
@@ -52,6 +53,18 @@ uv run uvicorn main:app --host 0.0.0.0 --port $PORT
 
 ## エンドポイント一覧
 
+### ファイル管理
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `POST` | `/files` | WAV ファイルをアップロード → `file_id` を返す |
+| `GET` | `/files` | ファイル一覧 |
+| `GET` | `/files/{file_id}` | ファイルのメタデータ |
+| `GET` | `/files/{file_id}/download` | WAV をダウンロード |
+| `DELETE` | `/files/{file_id}` | ファイルを削除 |
+
+### ジョブ管理
+
 | メソッド | パス | 説明 |
 |---|---|---|
 | `POST` | `/jobs/text2music` | テキスト・歌詞から楽曲を新規生成 |
@@ -60,13 +73,17 @@ uv run uvicorn main:app --host 0.0.0.0 --port $PORT
 | `POST` | `/jobs/extract` | 音源をステムに分離 |
 | `GET` | `/jobs` | オンメモリのジョブ一覧 |
 | `GET` | `/jobs/{id}` | ジョブのステータスとメタデータ |
-| `GET` | `/jobs/{id}/download` | 生成された WAV をダウンロード |
+
+生成エンドポイントはすべてジョブ ID を即座に返します（`202 Accepted`）。
+`GET /jobs/{id}` を `status == "done"` になるまでポーリングし、レスポンスの `file_id` を使って `GET /files/{file_id}/download` でダウンロードします。
+
+### サーバー
+
+| メソッド | パス | 説明 |
+|---|---|---|
 | `GET` | `/health` | サーバーヘルスチェック |
 | `GET` | `/help` | LLM 向け詳細リファレンス |
 | `GET` | `/docs` | Swagger UI（インタラクティブ） |
-
-生成エンドポイントはすべてジョブ ID を即座に返します（`202 Accepted`）。
-`GET /jobs/{id}` を `status == "done"` になるまでポーリングし、`GET /jobs/{id}/download` でダウンロードします。
 
 ---
 
@@ -93,14 +110,15 @@ EOF
 )
 
 # 完了まで待つ
-until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "queued" ] && \
-      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "running" ]; do
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
   echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
   sleep 5
 done
 
-# ダウンロード
-curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
+# file_id を取得してダウンロード
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o song.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 ---
@@ -108,17 +126,21 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 ### cover — 既存音源のスタイルを変換
 
 曲の音楽構造を保ちながら、スタイルだけを変換します。
-`src` はサーバー上の WAV ファイルの絶対パスを指定します。
+まず `POST /files` でファイルをアップロードし、返ってきた `file_id` を `src` に指定します。
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"  # 例: text2music の output_path
 
+# ソースファイルをアップロード
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
+
+# cover ジョブを投稿
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF | jq -r .id
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "prompt": "City Pop, groovy bass, smooth guitar, laid-back drums, polished 80s production",
   "strength": 0.7,
   "model": "xl-base",
@@ -133,7 +155,8 @@ until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ]
   sleep 5
 done
 
-curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o cover.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 **`strength`** — 元音源への追従度（0.0〜1.0）:
@@ -152,13 +175,16 @@ curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"
+
+# ソースファイルをアップロード
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
 
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs/repaint \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF | jq -r .id
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "prompt": "Dramatic orchestral strings, emotional swell, cinematic",
   "start": 15,
   "end": 30,
@@ -175,7 +201,8 @@ until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ]
   sleep 5
 done
 
-curl -o repainted.wav http://localhost:$PORT/jobs/$JOB/download
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o repainted.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 - `start` / `end`: 修正する区間を秒で指定。`end: -1` で末尾まで
@@ -189,13 +216,16 @@ curl -o repainted.wav http://localhost:$PORT/jobs/$JOB/download
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"
+
+# ソースファイルをアップロード
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
 
 RESP=$(curl -s -X POST http://localhost:$PORT/jobs/extract \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "targets": ["vocals", "drums", "bass", "other"],
   "model": "xl-base"
 }
@@ -213,7 +243,8 @@ for ID in $(echo "$RESP" | jq -r '.ids[]'); do
     echo "[$TARGET] status: $(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)"
     sleep 5
   done
-  curl -o "${TARGET}.wav" http://localhost:$PORT/jobs/$ID/download
+  FILE_ID=$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .file_id)
+  curl -o "${TARGET}.wav" http://localhost:$PORT/files/$FILE_ID/download
   echo "保存しました: ${TARGET}.wav"
 done
 ```
@@ -247,7 +278,7 @@ done
 
 | パラメーター | デフォルト | 説明 |
 |---|---|---|
-| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `src` | — | ソース WAV の `file_id` |
 | `prompt` | — | 変換後のスタイル説明 |
 | `strength` | `0.7` | 元音源への追従度（0.0〜1.0） |
 | `duration` | `null` | 生成秒数。未指定時は元音源と同じ長さ |
@@ -256,7 +287,7 @@ done
 
 | パラメーター | デフォルト | 説明 |
 |---|---|---|
-| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `src` | — | ソース WAV の `file_id` |
 | `prompt` | — | 修正後のスタイル説明 |
 | `start` | — | 修正開始時刻（秒） |
 | `end` | `-1` | 修正終了時刻（秒）。`-1` で末尾まで |
@@ -266,7 +297,7 @@ done
 
 | パラメーター | デフォルト | 説明 |
 |---|---|---|
-| `src` | — | サーバー上の音源ファイルの絶対パス |
+| `src` | — | ソース WAV の `file_id` |
 | `targets` | `["vocals","drums","bass","other"]` | 分離するステムのリスト |
 
 ### モデル比較

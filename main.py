@@ -4,7 +4,14 @@ ACE-Step 1.5 Music Generation Server
 A FastAPI server that accepts music generation requests, queues them, and
 processes them one at a time using ACE-Step 1.5.
 
-Endpoints:
+File management:
+  POST /files                     Upload an audio file
+  GET  /files                     List all files
+  GET  /files/{file_id}           Get file metadata
+  GET  /files/{file_id}/download  Download a file
+  DELETE /files/{file_id}         Delete a file
+
+Job management:
   POST /jobs/text2music           Generate music from text and lyrics
   POST /jobs/cover                Re-style an existing audio file
   POST /jobs/repaint              Edit a specific time range of an audio file
@@ -12,12 +19,12 @@ Endpoints:
 
   GET  /jobs                      List all in-memory jobs
   GET  /jobs/{id}                 Get job status and metadata
-  GET  /jobs/{id}/download        Download the generated WAV file
   GET  /health                    Server health check
   GET  /help                      LLM-friendly API reference
 """
 
 import asyncio
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -26,7 +33,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional, Union
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -42,7 +49,7 @@ from acestep.inference import GenerationParams, GenerationConfig, generate_music
 
 PROJECT_ROOT = Path(__file__).parent
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
-OUTPUT_DIR = PROJECT_ROOT / "outputs"
+FILES_DIR = PROJECT_ROOT / "files"
 LLM_MODEL = "acestep-5Hz-lm-1.7B"
 
 
@@ -78,6 +85,45 @@ PRESETS: dict[str, ModelPreset] = {
         dcw_enabled=False,
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# File store
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FileRecord:
+    id: str
+    filename: str
+    path: str
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "created_at": self.created_at,
+        }
+
+
+files_store: dict[str, FileRecord] = {}
+
+
+def _new_file_record(filename: str) -> FileRecord:
+    file_id = str(uuid.uuid4())
+    file_dir = FILES_DIR / file_id
+    file_dir.mkdir(parents=True, exist_ok=True)
+    path = str(file_dir / "audio.wav")
+    record = FileRecord(id=file_id, filename=filename, path=path)
+    files_store[file_id] = record
+    return record
+
+
+def _get_file_or_404(file_id: str) -> FileRecord:
+    record = files_store.get(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"File '{file_id}' not found")
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +191,7 @@ class Text2MusicRequest(_ModelMixin):
 
 class CoverRequest(_ModelMixin):
     task: str = Field(default="cover", frozen=True, exclude=True)
-    src: str = Field(description="Absolute path to the source audio file on the server.")
+    src: str = Field(description="File ID of the source audio file.")
     prompt: str = Field(description="Target style description for the cover version.")
     strength: float = Field(
         default=0.7,
@@ -163,7 +209,7 @@ class CoverRequest(_ModelMixin):
 
 class RepaintRequest(_ModelMixin):
     task: str = Field(default="repaint", frozen=True, exclude=True)
-    src: str = Field(description="Absolute path to the source audio file on the server.")
+    src: str = Field(description="File ID of the source audio file.")
     prompt: str = Field(description="Style description for the repainted section.")
     start: float = Field(description="Start time of the section to repaint, in seconds.")
     end: float = Field(
@@ -180,7 +226,7 @@ class RepaintRequest(_ModelMixin):
 
 class ExtractRequest(_ModelMixin):
     task: str = Field(default="extract", frozen=True, exclude=True)
-    src: str = Field(description="Absolute path to the source audio file on the server.")
+    src: str = Field(description="File ID of the source audio file.")
     targets: list[str] = Field(
         default=["vocals", "drums", "bass", "other"],
         description="Stems to extract. Each target becomes a separate job result.",
@@ -206,7 +252,7 @@ class Job:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
-    output_path: Optional[str] = None
+    file_id: Optional[str] = None
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -221,7 +267,7 @@ class Job:
                 round(self.completed_at - self.started_at, 2)
                 if self.started_at and self.completed_at else None
             ),
-            "output_path": self.output_path,
+            "file_id": self.file_id,
             "error": self.error,
             "request": self.request.model_dump(),
         }
@@ -281,6 +327,13 @@ def init_llm() -> LLMHandler:
 # Build GenerationParams from request
 # ---------------------------------------------------------------------------
 
+def _resolve_src(file_id: str) -> str:
+    record = files_store.get(file_id)
+    if not record:
+        raise RuntimeError(f"Source file not found: {file_id}")
+    return record.path
+
+
 def _build_params(req: AnyRequest) -> GenerationParams:
     preset = PRESETS[req.model]
     common = dict(
@@ -308,7 +361,7 @@ def _build_params(req: AnyRequest) -> GenerationParams:
             thinking=False,
             caption=req.prompt,
             lyrics="[Instrumental]",
-            src_audio=req.src,
+            src_audio=_resolve_src(req.src),
             audio_cover_strength=req.strength,
             duration=req.duration,
             **common,
@@ -319,21 +372,20 @@ def _build_params(req: AnyRequest) -> GenerationParams:
             thinking=False,
             caption=req.prompt,
             lyrics="[Instrumental]",
-            src_audio=req.src,
+            src_audio=_resolve_src(req.src),
             repainting_start=req.start,
             repainting_end=req.end,
             repaint_strength=req.strength,
             **common,
         )
     elif isinstance(req, ExtractRequest):
-        # targets must be a single-element list when going through the normal worker
         assert len(req.targets) == 1, "ExtractRequest in worker must have exactly one target"
         return GenerationParams(
             task_type="extract",
             thinking=False,
             caption=req.targets[0],
             lyrics="[Instrumental]",
-            src_audio=req.src,
+            src_audio=_resolve_src(req.src),
             **common,
         )
     else:
@@ -365,24 +417,35 @@ async def _run_job(job: Job) -> None:
     try:
         dit = get_dit_handler(preset)
         llm = init_llm()
-        OUTPUT_DIR.mkdir(exist_ok=True)
 
         params = _build_params(req)
+
+        # Create a dedicated output directory for this job's file
+        record = _new_file_record(f"acestep_{job.id[:8]}.wav")
+        save_dir = str(Path(record.path).parent)
+
         config = GenerationConfig(batch_size=1, audio_format="wav")
 
         result = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: generate_music(dit, llm, params=params, config=config, save_dir=str(OUTPUT_DIR)),
+            lambda: generate_music(dit, llm, params=params, config=config, save_dir=save_dir),
         )
 
         if not result.success:
+            # Clean up the pre-allocated file record on failure
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            del files_store[record.id]
             raise RuntimeError(result.status_message)
 
-        path = result.audios[0].get("path", "")
-        job.output_path = path
+        # Move generated file to the expected path if needed
+        generated_path = result.audios[0].get("path", "")
+        if generated_path and Path(generated_path) != Path(record.path):
+            shutil.move(generated_path, record.path)
+
+        job.file_id = record.id
         job.status = JobStatus.done
         job.completed_at = time.time()
-        logger.info(f"[{job.id[:8]}] Done in {job.completed_at - job.started_at:.1f}s → {path}")
+        logger.info(f"[{job.id[:8]}] Done in {job.completed_at - job.started_at:.1f}s → file_id={record.id}")
 
     except Exception as exc:
         job.status = JobStatus.failed
@@ -422,6 +485,7 @@ async def _enqueue(request: AnyRequest) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    FILES_DIR.mkdir(exist_ok=True)
     try:
         init_llm()
         get_dit_handler(PRESETS["xl-base"])
@@ -440,9 +504,55 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ACE-Step 1.5 Music Generation Server",
     description=__doc__,
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# File endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/files", status_code=201, summary="Upload an audio file")
+async def upload_file(file: UploadFile) -> dict:
+    """
+    Upload a WAV file to the server.
+    Returns a `file_id` to use as `src` in cover / repaint / extract requests.
+    """
+    record = _new_file_record(file.filename or "upload.wav")
+    with open(record.path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    logger.info(f"Uploaded file: {record.id} ({file.filename})")
+    return record.to_dict()
+
+
+@app.get("/files", summary="List all files")
+async def list_files() -> list[dict]:
+    """Returns all in-memory file records. Cleared on server restart."""
+    return [r.to_dict() for r in files_store.values()]
+
+
+@app.get("/files/{file_id}", summary="Get file metadata")
+async def get_file(file_id: str) -> dict:
+    return _get_file_or_404(file_id).to_dict()
+
+
+@app.get("/files/{file_id}/download", summary="Download a file")
+async def download_file(file_id: str) -> FileResponse:
+    """Download the WAV file associated with the given file_id."""
+    record = _get_file_or_404(file_id)
+    if not Path(record.path).exists():
+        raise HTTPException(status_code=500, detail="File missing on server")
+    return FileResponse(record.path, media_type="audio/wav", filename=record.filename)
+
+
+@app.delete("/files/{file_id}", status_code=204, summary="Delete a file")
+async def delete_file(file_id: str) -> None:
+    """Delete a file and its directory from the server."""
+    record = _get_file_or_404(file_id)
+    shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+    del files_store[file_id]
+    logger.info(f"Deleted file: {file_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +564,7 @@ async def submit_text2music(request: Text2MusicRequest) -> dict:
     """
     Generate a new song from a style prompt and lyrics.
     Returns a job ID immediately. Poll `GET /jobs/{id}` for status.
+    When done, use the returned `file_id` with `GET /files/{file_id}/download`.
     """
     return await _enqueue(request)
 
@@ -462,11 +573,10 @@ async def submit_text2music(request: Text2MusicRequest) -> dict:
 async def submit_cover(request: CoverRequest) -> dict:
     """
     Transform the style of an existing audio file while preserving its structure.
-    `src` must be an absolute path to a WAV file accessible on the server.
+    `src` must be a `file_id` returned by `POST /files`.
     `strength` controls how closely the output follows the source (0.0–1.0).
     """
-    if not Path(request.src).exists():
-        raise HTTPException(status_code=422, detail=f"src file not found: {request.src}")
+    _get_file_or_404(request.src)
     return await _enqueue(request)
 
 
@@ -474,10 +584,10 @@ async def submit_cover(request: CoverRequest) -> dict:
 async def submit_repaint(request: RepaintRequest) -> dict:
     """
     Regenerate a specific time range of an existing audio file with a new style.
+    `src` must be a `file_id` returned by `POST /files`.
     `start` and `end` are in seconds. `end=-1` means until the end of the file.
     """
-    if not Path(request.src).exists():
-        raise HTTPException(status_code=422, detail=f"src file not found: {request.src}")
+    _get_file_or_404(request.src)
     return await _enqueue(request)
 
 
@@ -485,11 +595,11 @@ async def submit_repaint(request: RepaintRequest) -> dict:
 async def submit_extract(request: ExtractRequest) -> dict:
     """
     Separate an audio file into individual stems (vocals, drums, bass, other, etc.).
+    `src` must be a `file_id` returned by `POST /files`.
     Each target stem is enqueued as a **separate job**. Returns a list of job IDs.
     Poll each ID individually via `GET /jobs/{id}`.
     """
-    if not Path(request.src).exists():
-        raise HTTPException(status_code=422, detail=f"src file not found: {request.src}")
+    _get_file_or_404(request.src)
 
     result_ids = []
     for target in request.targets:
@@ -529,33 +639,14 @@ async def list_jobs() -> list[dict]:
 
 @app.get("/jobs/{job_id}", summary="Get job status")
 async def get_job(job_id: str) -> dict:
-    """Returns status, metadata, and timing for the given job ID."""
+    """
+    Returns status, metadata, and timing for the given job ID.
+    When `status == 'done'`, use `file_id` with `GET /files/{file_id}/download`.
+    """
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     return job.to_dict()
-
-
-@app.get("/jobs/{job_id}/download", summary="Download generated WAV")
-async def download_job(job_id: str) -> FileResponse:
-    """
-    Download the generated WAV file.
-    - 404: job not found
-    - 409: job not done yet (queued or running)
-    - 422: job failed
-    """
-    job = jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-    if job.status == JobStatus.failed:
-        raise HTTPException(status_code=422, detail=f"Job failed: {job.error}")
-    if job.status != JobStatus.done:
-        raise HTTPException(status_code=409, detail=f"Job is '{job.status.value}', not done yet")
-    if not job.output_path or not Path(job.output_path).exists():
-        raise HTTPException(status_code=500, detail="Output file missing on server")
-
-    filename = f"acestep_{job_id[:8]}.wav"
-    return FileResponse(job.output_path, media_type="audio/wav", filename=filename)
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +663,7 @@ async def health() -> dict:
         "queue_size": job_queue.qsize(),
         "running": sum(1 for j in jobs.values() if j.status == JobStatus.running),
         "total_jobs": len(jobs),
+        "total_files": len(files_store),
     }
 
 
@@ -584,23 +676,35 @@ async def help_endpoint() -> JSONResponse:
     content = {
         "overview": (
             "ACE-Step 1.5 Music Generation Server. "
-            "Submit jobs via POST /jobs/<task>, poll via GET /jobs/{id}, "
-            "download via GET /jobs/{id}/download. "
-            "All requests are queued and processed one at a time."
+            "Upload audio via POST /files, submit jobs via POST /jobs/<task>, "
+            "poll via GET /jobs/{id}, download via GET /files/{file_id}/download. "
+            "All generation requests are queued and processed one at a time."
         ),
-        "quick_start": [
-            "1. POST /jobs/text2music  with {prompt, lyrics, duration, model}  →  {id}",
-            "2. GET /jobs/{id}  until status == 'done'",
-            "3. GET /jobs/{id}/download  →  WAV file",
-        ],
+        "quick_start": {
+            "text2music": [
+                "1. POST /jobs/text2music  with {prompt, lyrics, duration, model}  →  {id}",
+                "2. GET /jobs/{id}  until status == 'done'  →  {file_id}",
+                "3. GET /files/{file_id}/download  →  WAV file",
+            ],
+            "cover_repaint_extract": [
+                "1. POST /files  with WAV file  →  {id: file_id}",
+                "2. POST /jobs/cover  with {src: file_id, prompt, ...}  →  {id}",
+                "3. GET /jobs/{id}  until status == 'done'  →  {file_id}",
+                "4. GET /files/{file_id}/download  →  WAV file",
+            ],
+        },
         "endpoints": {
+            "POST /files": "Upload a WAV file. Returns file_id.",
+            "GET /files": "List all files.",
+            "GET /files/{file_id}": "Get file metadata.",
+            "GET /files/{file_id}/download": "Download WAV.",
+            "DELETE /files/{file_id}": "Delete a file.",
             "POST /jobs/text2music": "Generate new music from prompt + lyrics.",
-            "POST /jobs/cover": "Re-style an existing audio file. Requires 'src' (server path).",
+            "POST /jobs/cover": "Re-style an existing audio file. Requires 'src' (file_id).",
             "POST /jobs/repaint": "Edit a time range of an existing audio file. Requires 'src', 'start', 'end'.",
             "POST /jobs/extract": "Separate audio into stems. Returns multiple job IDs, one per target.",
             "GET /jobs": "List all in-memory jobs (cleared on restart).",
-            "GET /jobs/{id}": "Get status, timing, and request params for a job.",
-            "GET /jobs/{id}/download": "Download WAV. 409 if not done, 422 if failed.",
+            "GET /jobs/{id}": "Get status, timing, file_id, and request params for a job.",
             "GET /health": "Health, queue depth, loaded models.",
             "GET /help": "This document.",
         },

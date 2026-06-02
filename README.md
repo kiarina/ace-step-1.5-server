@@ -3,8 +3,9 @@
 A **FastAPI** server for [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) music generation, optimized for **Apple Silicon (Mac Studio M4 Max)**.
 
 - Accepts concurrent requests, processes one at a time via an internal queue
-- Each request gets a job ID for async polling and file download
-- Jobs are in-memory only — cleared on server restart
+- Each request gets a job ID for async polling
+- All files (uploads and generated output) managed via `/files` API with `file_id`
+- Jobs and files are in-memory only — cleared on server restart
 
 ---
 
@@ -51,6 +52,18 @@ The server pre-loads `xl-base` and the LLM at startup (~30s). Interactive docs a
 
 ## Endpoints
 
+### Files
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/files` | Upload an audio file → returns `file_id` |
+| `GET` | `/files` | List all files |
+| `GET` | `/files/{file_id}` | Get file metadata |
+| `GET` | `/files/{file_id}/download` | Download WAV |
+| `DELETE` | `/files/{file_id}` | Delete a file |
+
+### Jobs
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/jobs/text2music` | Generate music from text and lyrics |
@@ -59,13 +72,17 @@ The server pre-loads `xl-base` and the LLM at startup (~30s). Interactive docs a
 | `POST` | `/jobs/extract` | Separate audio into stems |
 | `GET` | `/jobs` | List all in-memory jobs |
 | `GET` | `/jobs/{id}` | Get job status and metadata |
-| `GET` | `/jobs/{id}/download` | Download generated WAV |
+
+All generation endpoints return a job ID immediately (`202 Accepted`).
+Poll `GET /jobs/{id}` until `status == "done"`, then download with `GET /files/{file_id}/download`.
+
+### Server
+
+| Method | Path | Description |
+|---|---|---|
 | `GET` | `/health` | Server health check |
 | `GET` | `/help` | LLM-friendly full reference |
 | `GET` | `/docs` | Interactive Swagger UI |
-
-All generation endpoints return a job ID immediately (`202 Accepted`).
-Poll `GET /jobs/{id}` until `status == "done"`, then download with `GET /jobs/{id}/download`.
 
 ---
 
@@ -92,14 +109,15 @@ EOF
 )
 
 # Poll
-until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "queued" ] && \
-      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" != "running" ]; do
+until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ] || \
+      [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "failed" ]; do
   echo "status: $(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)"
   sleep 5
 done
 
-# Download
-curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
+# Get file_id and download
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o song.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 ---
@@ -107,17 +125,21 @@ curl -o song.wav http://localhost:$PORT/jobs/$JOB/download
 ### cover — Re-style an existing audio file
 
 Transform the style of a song while preserving its musical structure.
-`src` must be an absolute path to a WAV file on the server.
+Upload the source file first, then pass its `file_id` as `src`.
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"  # e.g. output from text2music
 
+# Upload source file
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
+
+# Submit cover job
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs/cover \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF | jq -r .id
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "prompt": "City Pop, groovy bass, smooth guitar, laid-back drums, polished 80s production",
   "strength": 0.7,
   "model": "xl-base",
@@ -132,7 +154,8 @@ until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ]
   sleep 5
 done
 
-curl -o cover.wav http://localhost:$PORT/jobs/$JOB/download
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o cover.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 **`strength`**: how closely the output follows the source structure.
@@ -151,13 +174,16 @@ Regenerate a section of an existing audio file with a new style.
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"
+
+# Upload source file
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
 
 JOB=$(curl -s -X POST http://localhost:$PORT/jobs/repaint \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF | jq -r .id
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "prompt": "Dramatic orchestral strings, emotional swell, cinematic",
   "start": 15,
   "end": 30,
@@ -174,7 +200,8 @@ until [ "$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .status)" = "done" ]
   sleep 5
 done
 
-curl -o repainted.wav http://localhost:$PORT/jobs/$JOB/download
+FILE_ID=$(curl -s http://localhost:$PORT/jobs/$JOB | jq -r .file_id)
+curl -o repainted.wav http://localhost:$PORT/files/$FILE_ID/download
 ```
 
 - `start` / `end`: time range in seconds. `end: -1` means until end of file.
@@ -188,13 +215,16 @@ Each target stem is a **separate job**. The response contains a list of IDs.
 
 ```bash
 export PORT=8000
-SRC="/absolute/path/to/song.wav"
+
+# Upload source file
+SRC_ID=$(curl -s -X POST http://localhost:$PORT/files \
+  -F "file=@/path/to/song.wav" | jq -r .id)
 
 RESP=$(curl -s -X POST http://localhost:$PORT/jobs/extract \
   -H "Content-Type: application/json" \
   --data-binary @- <<EOF
 {
-  "src": "$SRC",
+  "src": "$SRC_ID",
   "targets": ["vocals", "drums", "bass", "other"],
   "model": "xl-base"
 }
@@ -212,7 +242,8 @@ for ID in $(echo "$RESP" | jq -r '.ids[]'); do
     echo "[$TARGET] status: $(curl -s http://localhost:$PORT/jobs/$ID | jq -r .status)"
     sleep 5
   done
-  curl -o "${TARGET}.wav" http://localhost:$PORT/jobs/$ID/download
+  FILE_ID=$(curl -s http://localhost:$PORT/jobs/$ID | jq -r .file_id)
+  curl -o "${TARGET}.wav" http://localhost:$PORT/files/$FILE_ID/download
   echo "Saved ${TARGET}.wav"
 done
 ```
@@ -246,7 +277,7 @@ Available targets: `vocals`, `drums`, `bass`, `other` (and any stem name support
 
 | Parameter | Default | Description |
 |---|---|---|
-| `src` | — | Absolute path to source WAV on the server |
+| `src` | — | `file_id` of the source WAV |
 | `prompt` | — | Target style description |
 | `strength` | `0.7` | Source adherence (0.0–1.0) |
 | `duration` | `null` | Output length. Defaults to source length |
@@ -255,7 +286,7 @@ Available targets: `vocals`, `drums`, `bass`, `other` (and any stem name support
 
 | Parameter | Default | Description |
 |---|---|---|
-| `src` | — | Absolute path to source WAV on the server |
+| `src` | — | `file_id` of the source WAV |
 | `prompt` | — | Style for the repainted section |
 | `start` | — | Start time in seconds |
 | `end` | `-1` | End time in seconds. `-1` = until end of file |
@@ -265,7 +296,7 @@ Available targets: `vocals`, `drums`, `bass`, `other` (and any stem name support
 
 | Parameter | Default | Description |
 |---|---|---|
-| `src` | — | Absolute path to source WAV on the server |
+| `src` | — | `file_id` of the source WAV |
 | `targets` | `["vocals","drums","bass","other"]` | Stems to extract |
 
 ### Models
