@@ -1,8 +1,10 @@
 [project]
 name = "ace-step-1-5-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "FastAPI server for ACE-Step 1.5 music generation, optimized for Apple Silicon"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "ace-step",
     "fastapi>=0.136.3",
