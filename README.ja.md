@@ -344,3 +344,11 @@ done
 > **注意:** 歌詞の量を `duration` に合わせてください。長い曲に対して歌詞が短すぎると、後半でモデルが崩れやすくなります。
 
 詳細なリファレンスは `GET /help` で確認できます。
+
+---
+
+## ライセンス
+
+本サーバーのソースコードは [MIT License](LICENSE) で公開しています。upstream の [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) と同じライセンスです。
+
+> **注意:** MIT License が対象とするのは本リポジトリのコードのみです。ACE-Step のモデルウェイト（`xl-base`、`turbo`、同梱の LLM）は別途配布されており、[Hugging Face のモデルページ](https://huggingface.co/ACE-Step) に記載された各自の規約に従います。商用利用や再配布の可否は、デプロイ前にそちらのライセンスを確認してください。

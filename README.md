@@ -342,3 +342,11 @@ Modifiers: `[Verse 1 - Female]`, `[Chorus - Both]`, `[Bridge - Whispered]`, `[Ou
 > **Tip:** Match lyrics length to `duration`. Too few lines for a long duration causes the model to lose coherence in the second half.
 
 See `GET /help` for a complete LLM-friendly reference.
+
+---
+
+## License
+
+This server's source code is licensed under the [MIT License](LICENSE), matching upstream [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5).
+
+> **Note:** The MIT License covers this repository's code only. The ACE-Step model weights (`xl-base`, `turbo`, the bundled LLM) are distributed separately and governed by their own terms on the [Hugging Face model pages](https://huggingface.co/ACE-Step). Check those licenses for commercial-use and redistribution conditions before deploying.
